@@ -7,8 +7,6 @@ from scipy.stats import poisson as ps
 def poisson(x, mean):
     return ps.pmf(x, mean)
 
-# units_codelife is a numpy array (units, days_left). It has shape (n, 2) where n is the lead_time.
-
 class LossSimulation:
     def __init__(self, codelife, unit_sales_per_day, units_per_case, lead_time):
         self.codelife = codelife
@@ -20,11 +18,11 @@ class LossSimulation:
         self.n_units, self.days_left = self.initialise_inventory()
 
     def initialise_inventory(self):
-        n_units = np.ones(1, dtype = int) * self.units_per_case
+        n_units = np.ones(1, dtype = int) * int(self.codelife * self.unit_sales_per_day / self.units_per_case) * self.units_per_case
         days_left = np.ones(1, dtype = int) * self.codelife
         return n_units, days_left
 
-    def simulate(self, n_units, days_left, total_days, stockout_threshold = 0.1, rotation = True, verbose = False):
+    def simulate(self, n_units, days_left, total_days, stockout_threshold = 0.1, rotation = True, verbose = 0):
         """
         Run the simulation to calculate the loss for a given set of parameters.
 
@@ -42,27 +40,30 @@ class LossSimulation:
         cases_ordered = np.zeros(total_days, dtype = int)
         
         for day in range(total_days):
-            print('Start of day', day, n_units, days_left)
-            if verbose:
-                print('Day', day, n_units, days_left)
             
             prob_stockout = self.probability_stockout(n_units, days_left, rotation, verbose)
-            print('Probability of stockout', prob_stockout)
+            
+            if verbose >= 1:
+                print()
+                print('Day', day, n_units, days_left, prob_stockout)
+            if verbose >= 2:
+                active_groups = (days_left > 0) & (days_left <= self.codelife)
+                print('Day', day, 'Active Groups:', np.argwhere(active_groups).flatten())
             
             i = 0
             while prob_stockout > stockout_threshold:
-                if verbose:
-                    print('Ordering more stock')
-                    print('probability of stockout', prob_stockout)
                 cases_ordered[day] += 1
                 n_units, days_left = self.order_stock(n_units, days_left)
                 prob_stockout = self.probability_stockout(n_units, days_left, rotation, verbose)
+                if verbose >= 1:
+                    print('Day', day, 'ordered more stock')
+                    print('Day', day, n_units, days_left, prob_stockout)
                 i += 1
                 if i > 10:
                     print('Warning: infinite loop')
                     break
                     
-            n_units = self.simulate_sales(n_units, rotation, verbose)
+            n_units[days_left <= self.codelife] = self.simulate_sales(n_units[days_left <= self.codelife], rotation, verbose)
 
             wasted_units_mask = days_left <= 1
             keep_units_mask = (days_left > 1) & (n_units > 0)
@@ -71,6 +72,10 @@ class LossSimulation:
             wasted_units[day] = np.sum(n_units[wasted_units_mask])
             # Calculate whether we had a stockout
             stockout[day] = np.sum(n_units[days_left <= self.codelife]) == 0
+
+            if verbose >= 2:
+                print('Day', day, 'Wasted Units:', wasted_units[day])
+                print('Day', day, 'Stockout:', stockout[day])
 
             # Update the inventory
             n_units = n_units[keep_units_mask]
@@ -85,40 +90,24 @@ class LossSimulation:
 
         If they're currently of length zero, then add a new entry to the end of the arrays.
 
-        If the days_left of the final entry is equal to codelife + lead_time - 1, then add to that inventory level. Otherwise, add a new entry to the end of the arrays. 
+        If the days_left of the final entry is equal to codelife + lead_time, then add to that inventory level. Otherwise, add a new entry to the end of the arrays. 
         """
         if len(n_units) == 0:
             n_units = np.append(n_units, self.units_per_case)
             days_left = np.append(days_left, self.codelife + self.lead_time)
+        
         elif days_left[-1] == self.codelife + self.lead_time:
             n_units[-1] += self.units_per_case
+        
         else:
             n_units = np.append(n_units, self.units_per_case)
             days_left = np.append(days_left, self.codelife + self.lead_time)
         
         return n_units, days_left
 
-    def probability_stockout(self, n_units, days_left, rotation_weighting = True, verbose = False):
+    def probability_stockout(self, n_units, days_left, rotation_weighting = True, verbose = 0):
         """We calculate the probability of a stockout as follows:
-        Take in the number of units at each remaining day of codelife, units with remaining codelife that exceeds the shelf_life are aggregated.
-
-        WEIGHTING:
-        If rotation_weighting is True:
-            1. Assume the sales for a given day fall entirely on product with lowest days_left. 
-            2. Calculate the expected sales for first group as the min(sales per day * remaining days, units remaining).
-            3. Calculate the expected sales for the second group as the min(sales per day * remaining days - expected sales for previous groups, units_remaining).
-            4. Repeat for all groups.
-            5. For the final group, calculate the expected sales as sales per day * remaining days - expected sales for previous groups. We don't cap this at the maximum so we can accurately represent the probability of a stockout. 
-        If rotation_weighting is False:
-            1. Assume the sales for a given day are distributed evenly across all products and are weighted by the unit days available as a fraction of the total. 
-            2. Calculate the expected sales for the first group as (sales per day * remaining days) * (n_units * remaining days for this group) / (sum of n_units * remaining days for all groups).
-
-            
-        STOCKOUT PROBABILITY:
-        Then the probability of a stockout is the probability of selling at least the n_units for the final group, which we can calculate from the poisson distribution.
-            P(stockout) = 1 - P(selling < n_units) = 1 - sum(P(selling = i) for i in range(n_units))
-
-    
+        Take in the number of units at each remaining day of codelife, units with remaining codelife that exceeds the shelf_life are aggregated.    
         """
 
         assert len(n_units) == len(days_left)
@@ -130,24 +119,45 @@ class LossSimulation:
        
         return prob_stockout
         
-    def probability_stockout_rotation(self, n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose = True):
+    def probability_stockout_rotation(self, n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose = 0):
         """
-        Calculates the probability of a stockout occuring at lead_time + 1 days into the future. This gives us the chance to order more stock today to account for this. For example if lead_time = 2, then we'd need to wait 2 days while the stock is in transit and then consider the probability of a stockout occuring on the third day. 
+        Calculates the probability of a stockout occuring at lead_time + 1 days into the future. 
+        This means stock ordered today will reduce this stockout probability. 
+            eg. if lead_time = 2, then we'd need to wait 2 days while the stock is in transit. It would be active on day 3. We could consider the probability of a stockout occuring on the third day. 
+        
+            Consider the case where we have stock with days_left = 3. On day 3 this should also be active, and even though it can't be used on day 4 we shouldn't consider it a stockout if any of the stock remains on day 3.
 
-        If rotation_weighting = True, then this is an in depth calculation if you don't simulate it. This is because we need to keep track of lots of probabilities. 
-        1. Determine the number of distinct intervals there are seperated by moments that stock becomes active, or stock becomes available in store as a result of a delivery. This gives you a series of intervals with a given number of days seperating them. 
-        2. For the first interval, we start with a guaranteed probability of having the starting number of units in each group. This can be represented as sparse probability distribution which is equal to zero everywhere except at the starting number of units. Populate these distributions for each group. 
-            2a. Still in the first interval, calculate the mean number of sales as the days in that interval * sales per day.
-            2b. Calculate the resulting probability distribution for sales up to 5 standard deviations above the mean using the poisson distribution. 
-            2c. Starting with the first group, calculate the new distribution of units remaining and the new distribution of sales. 
-            2d. Take the new distribution of sales and apply this to the next group, and repeat until you reach the final group. 
-        3. For the second interval, we start with a the probability distribution that we calculated from the first interval. We now begin at the second group, and repeat the process from 2c onwards. 
-        4. Repeat for all intervals. If you have a delivery on a given day, then you need to update add that to the processed groups for the next interval.     
+        To compute this we perform the following steps: 
+            1. Determine the number of distinct intervals there are seperated by moments that stock becomes inactive, or stock becomes available in store as a result of a delivery. This gives you a series of intervals with a given number of days seperating them. 
+            2. For the first interval, we start with a guaranteed probability of having the starting number of units in each group. This can be represented as sparse probability distribution which is equal to zero everywhere except at the starting number of units. Populate these distributions for each group. 
+                2a. Still in the first interval, calculate the mean number of sales as the days in that interval * sales per day.
+                2b. Calculate the resulting probability distribution for sales up to 5 standard deviations above the mean using the poisson distribution. 
+                2c. Starting with the first group, calculate the new distribution of units remaining and the new distribution of sales. 
+                2d. Take the new distribution of sales and apply this to the next group, and repeat until you reach the final group. 
+            3. For the second interval, we start with a the probability distribution that we calculated from the first interval. We now begin at the second group, and repeat the process from 2c onwards. 
+                3a. The mean number of sales may be different if the number of days in the interval has also changed. We will need to recalculate this. 
+                3b. Propagate the probability distribution forwards as before.
+            4. Repeat for all intervals. If you have a delivery on a given day, then you need to update add that to the processed groups for the next interval.
+
+        At the end of this process, we will have a probability distribution for the number of units remaining in each group at the end of the lead time + 1 days. The probability of a stockout is the probability that the active groups on the final day have zero units remaining. 
+
+        We will define active groups as those where:
+            not_expired: days_left > 0
+            entered_stockpile: days_left <= codelife
+
+        To check for active groups after lead_time + 1 days, we need to bear in mind how days are indexed. 
+        Here the simulation starts at day 0, and hence the lead_time + 1 day is indexed as lead_time.
+        Therefore when we check for active groups on the lead_time + 1 day, we need to check for groups that are 
         """
-        # Do a quick check to see if we have any active stock at the end of the lead time. If not, then we can return a stockout probability of 1.
-        active_groups = (days_left - (lead_time + 1) > 0) & (days_left - (lead_time + 1) <= codelife)
+        max_days_ahead = lead_time + 1
+
+        # Check for active stock at the end of the time period. 
+        # If not, return a stockout probability of 1.
+        active_groups = (days_left - (max_days_ahead - 1) > 0) & (days_left - (max_days_ahead - 1) <= codelife)
         if not np.any(active_groups):
-            return 1
+             if verbose >= 2:
+                print('No active groups at end of lead time')
+                return 1
 
         # Initialise the probability distributions for each group. 
         p_units_list = []
@@ -157,13 +167,13 @@ class LossSimulation:
             p_units_list[-1][-1] = 1
 
         # Calculate the intervals where stock expires or enters the system.
-        interval_edges = np.sort(np.unique(np.concatenate([[0], [lead_time + 1], days_left[days_left <= codelife], days_left[days_left > codelife] - codelife])))
-        interval_edges = interval_edges[interval_edges <= lead_time + 1]
+        interval_edges = np.sort(np.unique(np.concatenate([[0], [max_days_ahead], days_left[days_left <= codelife], days_left[days_left > codelife] - codelife])))
+        interval_edges = interval_edges[interval_edges <= max_days_ahead]
         intervals = np.diff(interval_edges)
 
-        assert np.sum(intervals) == lead_time + 1
+        assert np.sum(intervals) == max_days_ahead
 
-        if verbose:
+        if verbose >= 3:
             print('interval_edges', interval_edges)
             print('intervals', intervals)
 
@@ -178,7 +188,7 @@ class LossSimulation:
             active_idx = np.argwhere(active_groups).flatten()
             active_p_units_list = [p_units_list[i] for i in active_idx]
 
-            if verbose:
+            if verbose >= 3:
                 print('Days Ahead:              ', days_ahead)
                 print('Expired Groups:          ', np.argwhere(np.logical_not(not_expired)).flatten())
                 print('ACTIVE Groups:           ', active_idx)
@@ -199,16 +209,16 @@ class LossSimulation:
             active_p_units_list = self.propagate_probability(p_sales, active_p_units_list)
 
             # Update the probability distributions for the active groups
-            for active_idx, all_idx in enumerate(active_idx):
-                p_units_list[all_idx] = active_p_units_list[active_idx]
+            for active_id, all_id in enumerate(active_idx):
+                p_units_list[all_id] = active_p_units_list[active_id]
 
             # Update the days ahead
             days_ahead += interval
 
         # Calculate the probability of a stockout
         prob_stockout = 1
-        for p_units in p_units_list:
-            prob_stockout *= np.sum(p_units[0])
+        for active_id in active_idx:
+            prob_stockout *= np.sum(p_units_list[active_id][0])
 
         return prob_stockout
 
@@ -244,7 +254,7 @@ class LossSimulation:
         
         return updated_p_units_list
 
-    def probability_stockout_no_rotation(self, n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose = True, account_for_variance = False):
+    def probability_stockout_no_rotation(self, n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose = 0, account_for_variance = False):
         """
         When we don't rotate the stock, we can calculate the probability of a stockout as follows:
             1. Assume the sales for a given day are distributed evenly across all products and are weighted by the unit days available as a fraction of the total. 
@@ -259,14 +269,19 @@ class LossSimulation:
                 P(stockout) = 1 - P(selling < n_units) = 1 - sum(P(selling = i) for i in range(n_units))
             And multiply the probabilities together for each group. 
         """
-        # Do a quick check to see if we have any active stock at the end of the lead time. If not, then we can return a stockout probability of 1.
-        final_active_groups = (days_left - (lead_time + 1) > 0) & (days_left - (lead_time + 1) <= codelife)
+        max_days_ahead = lead_time + 1
+
+        # Check for active stock at the end of the time period. 
+        # If not, return a stockout probability of 1.
+        final_active_groups = (days_left - (max_days_ahead - 1) > 0) & (days_left - (max_days_ahead - 1) <= codelife)
         if not np.any(final_active_groups):
+            if verbose >= 2:
+                print('No active groups at end of lead time')
             return 1
         
         
         # Add an axis to days_ahead, days_left, & n_units so we can broadcast them together
-        days_ahead = np.arange(lead_time + 1)[np.newaxis, :]
+        days_ahead = np.arange(max_days_ahead)[np.newaxis, :]
         days_left = days_left[:, np.newaxis]
         n_units = n_units[:, np.newaxis]
 
@@ -276,7 +291,7 @@ class LossSimulation:
 
         # Expected sales are just weighted by the number of unit days available
         n_units = n_units.flatten()
-        total_sales = unit_sales_per_day * (lead_time + 1)
+        total_sales = unit_sales_per_day * (max_days_ahead)
         expected_sales = total_sales * active_unit_days / np.sum(active_unit_days)
 
         if account_for_variance:
@@ -298,7 +313,7 @@ class LossSimulation:
         
         return np.prod(prob_stockout)
     
-    def simulate_sales(self, n_units, rotation_weighting = True, verbose = True):
+    def simulate_sales(self, n_units, rotation_weighting = True, verbose = 0):
         """Calculate the expected sales for each day by sampling from the poisson distribution with mean equal to the expected sales per day. 
 
         If rotation_weighting is True:
@@ -312,12 +327,15 @@ class LossSimulation:
             1. Randomly assign the sales for a given day to each group, weighting by the units remaining in that group
         """
 
+        if len(n_units) == 0 or np.sum(n_units) == 0:
+            print('Sales today: nothing to sell')
+            return n_units
+
         sales_today = ps.rvs(self.unit_sales_per_day)
         sales = np.zeros(len(n_units), dtype = int)
 
-        if verbose:
+        if verbose >= 2:
             print('Sales today:', sales_today)
-        print('Sales today:', sales_today)
         
 
         if rotation_weighting:
@@ -332,7 +350,7 @@ class LossSimulation:
                 sales_today -= 1
                 weights = (n_units - sales) / np.sum(n_units - sales)
                 sales += np.minimum(np.random.multinomial(1, weights), n_units)
-                if verbose:
+                if verbose >= 2:
                     print(sales_today, sales, n_units)
 
             assert np.sum(sales) == np.min([original_sales_today, np.sum(n_units)])
