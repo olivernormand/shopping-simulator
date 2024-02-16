@@ -4,6 +4,8 @@ import pandas as pd
 
 from scipy.stats import poisson as ps
 
+import functools
+
 def poisson(x, mean):
     return ps.pmf(x, mean)
 
@@ -22,25 +24,48 @@ class LossSimulation:
         days_left = np.ones(1, dtype = int) * self.codelife
         return n_units, days_left
 
+    def calculate_min_loss(self, total_days, rotation = True, stockout_threshold = np.linspace(1e-6, 0.999, 10), multipliers = (1, 1), deep_search = 0, verbose = False):
+        """Calculate the minimum loss for a given set of parameters. 
+        First searching a full range of stockout thresholds. Optionally narrow the search window and repeat. 
 
-    def calculate_min_loss(self, total_days, rotation = True, granularitys = (10, 20), multipliers = (1, 1)):
-        """
-        Calculate the minimum loss for a given set of parameters. We do this by first searching a wide range of stockout thresholds, and then narrowing down the search window and repeating. This happens with two searches. 
-
-        The first search focuses on all the available stockout thresholds. 
         The second search considers the stockout threshold that gave the lowest in the first search, and searches a narrower window around that threshold.
+
+        Parameters
+        ----------
+        total_days : _type_
+            How many days the simulation should run for in total. This is split amongst the searches.
+        rotation : bool, optional
+            Whether to use stock rotation, by default True
+        stockout_threshold : _type_, optional
+            What the starting stockout threshold search should be, by default np.linspace(1e-6, 0.999, 10)
+        multipliers : tuple, optional
+            The weighting of total days between the first and second search, by default (1, 1)
+        deep_search : int, optional
+            How many spacings to allocate for the deep search. If zero then no secondary search occurs, by default 0
+
+        Returns
+        -------
+        _type_
+            _description_
         """
+
+
+        granularitys = (len(stockout_threshold), deep_search)
 
         # Total days is the total days available to calculate the min_loss. We scale this down originally.
-        total_days = int(total_days / (granularitys[0] * multipliers[0] + granularitys[1] * multipliers[1]))
-        print('Before the multiplier, each simulation will run for', total_days, 'days')
+        if deep_search > 0:
+            total_days = int(total_days / (granularitys[0] * multipliers[0] + granularitys[1] * multipliers[1]))
+        else:
+            total_days = int(total_days / (granularitys[0] * multipliers[0]))
+        
+        if verbose:
+            print('Before the multiplier, each simulation will run for', total_days, 'days')
 
         stockout_thresholds = []
         min_losses = []
         availability_losses = []
         waste_losses = []
 
-        stockout_threshold = np.linspace(1e-4, 0.999, granularitys[0])
         min_loss = np.zeros(len(stockout_threshold))
         availability_loss = np.zeros(len(stockout_threshold))
         waste_loss = np.zeros(len(stockout_threshold))
@@ -54,33 +79,37 @@ class LossSimulation:
         availability_losses.append(availability_loss)
         waste_losses.append(waste_loss)
 
-        print('INITIAL SEARCH COMPLETE')
-        print('Stockout Thresholds:', stockout_threshold)
-        print('Min Loss:', min_loss)
-        # Narrow down the search window and go again
-        min_loss_sum = np.convolve(min_loss, np.ones(2), 'valid')
-        arg_min = np.argmin(min_loss_sum)
-        lower_bound = stockout_threshold[arg_min]
-        upper_bound = stockout_threshold[arg_min + 1]
-        expand_bound = (upper_bound - lower_bound) / 2
-        lower_bound = np.max([0, lower_bound - expand_bound])
-        upper_bound = np.min([1, upper_bound + expand_bound])
-        stockout_threshold = np.linspace(lower_bound, upper_bound, granularitys[1])
-        min_loss = np.zeros(len(stockout_threshold))
-        availability_loss = np.zeros(len(stockout_threshold))
-        waste_loss = np.zeros(len(stockout_threshold))
+        if verbose:
+            print('INITIAL SEARCH COMPLETE')
+            print('Stockout Thresholds:', stockout_threshold)
+            print('Min Loss:', min_loss)
 
-        for i, threshold in enumerate(stockout_threshold):
-            min_loss[i], availability_loss[i], waste_loss[i] = self.calculate_loss(int(total_days * multipliers[1]), threshold, rotation = rotation, verbose = 0)
-        
-        stockout_thresholds.append(stockout_threshold)
-        min_losses.append(min_loss)
-        availability_losses.append(availability_loss)
-        waste_losses.append(waste_loss)
-        
-        print('NARROWED SEARCH WINDOW')
-        print('Stockout Thresholds:', stockout_threshold)
-        print('Min Loss:', min_loss)
+        if deep_search > 0:
+            # Narrow down the search window and go again
+            min_loss_sum = np.convolve(min_loss, np.ones(2), 'valid')
+            arg_min = np.argmin(min_loss_sum)
+            lower_bound = stockout_threshold[arg_min]
+            upper_bound = stockout_threshold[arg_min + 1]
+            expand_bound = (upper_bound - lower_bound) / 2
+            lower_bound = np.max([0, lower_bound - expand_bound])
+            upper_bound = np.min([1, upper_bound + expand_bound])
+            stockout_threshold = np.linspace(lower_bound, upper_bound, granularitys[1])
+            min_loss = np.zeros(len(stockout_threshold))
+            availability_loss = np.zeros(len(stockout_threshold))
+            waste_loss = np.zeros(len(stockout_threshold))
+
+            for i, threshold in enumerate(stockout_threshold):
+                min_loss[i], availability_loss[i], waste_loss[i] = self.calculate_loss(int(total_days * multipliers[1]), threshold, rotation = rotation, verbose = 0)
+            
+            stockout_thresholds.append(stockout_threshold)
+            min_losses.append(min_loss)
+            availability_losses.append(availability_loss)
+            waste_losses.append(waste_loss)
+            
+            if verbose:
+                print('NARROWED SEARCH WINDOW')
+                print('Stockout Thresholds:', stockout_threshold)
+                print('Min Loss:', min_loss)
 
         all_threshold = np.concatenate(stockout_thresholds, axis=0)
         all_loss = np.concatenate(min_losses, axis=0)
@@ -108,7 +137,6 @@ class LossSimulation:
 
         print(losses)
         return np.mean(losses), np.std(losses)
-
 
     def calculate_loss(self, total_days, stockout_threshold, rotation = True, verbose = 0, weights = np.array([1,1])):
         
@@ -146,8 +174,8 @@ class LossSimulation:
         cases_ordered = np.zeros(total_days, dtype = int)
         
         for day in range(total_days):
-            
-            prob_stockout = self.probability_stockout(n_units, days_left, rotation, verbose)
+
+            prob_stockout = self.probability_stockout(tuple(n_units), tuple(days_left), self.unit_sales_per_day, self.lead_time, self.codelife, rotation, verbose)
             
             if verbose >= 1:
                 print()
@@ -160,12 +188,12 @@ class LossSimulation:
             while prob_stockout > stockout_threshold:
                 cases_ordered[day] += 1
                 n_units, days_left = self.order_stock(n_units, days_left)
-                prob_stockout = self.probability_stockout(n_units, days_left, rotation, verbose)
+                prob_stockout = self.probability_stockout(tuple(n_units), tuple(days_left), self.unit_sales_per_day, self.lead_time, self.codelife, rotation, verbose)
                 if verbose >= 1:
                     print('Day', day, 'ordered more stock')
                     print('Day', day, n_units, days_left, prob_stockout)
                 i += 1
-                if i > 10:
+                if i > 30:
                     print('Warning: infinite loop', day, n_units, days_left, prob_stockout, stockout_threshold)
                     break
                     
@@ -189,7 +217,6 @@ class LossSimulation:
 
         return wasted_units, cases_ordered, stockout
   
-
     def order_stock(self, n_units, days_left):
         """
         Update the n_units and days_left arrays to represent an increased stock level. 
@@ -211,19 +238,23 @@ class LossSimulation:
         
         return n_units, days_left
 
-    def probability_stockout(self, n_units, days_left, rotation_weighting = True, verbose = 0):
+    @functools.lru_cache(maxsize = None)
+    def probability_stockout(self, n_units, days_left, unit_sales_per_day, lead_time, codelife, rotation_weighting = True, verbose = 0):
         """We calculate the probability of a stockout as follows:
         Take in the number of units at each remaining day of codelife, units with remaining codelife that exceeds the shelf_life are aggregated.    
         """
+        # To enable cacheing, we have passed the arguments of n_units and days_left as tuples.
+        # These are subsequently converted back to arrays.
+
+        n_units = np.array(n_units)
+        days_left = np.array(days_left)
 
         assert len(n_units) == len(days_left)
 
-        print(n_units, days_left)
-
         if rotation_weighting:
-            prob_stockout = self.probability_stockout_rotation(n_units, days_left, self.unit_sales_per_day, self.lead_time, self.codelife, verbose)
+            prob_stockout = self.probability_stockout_rotation(n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose)
         else:
-            prob_stockout = self.probability_stockout_no_rotation(n_units, days_left, self.unit_sales_per_day, self.lead_time, self.codelife, verbose)
+            prob_stockout = self.probability_stockout_no_rotation(n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose)
        
         return prob_stockout
         
@@ -257,6 +288,7 @@ class LossSimulation:
         Here the simulation starts at day 0, and hence the lead_time + 1 day is indexed as lead_time.
         Therefore when we check for active groups on the lead_time + 1 day, we need to check for groups that are 
         """
+
         max_days_ahead = lead_time + 1
 
         # Check for active stock at the end of the time period. 
