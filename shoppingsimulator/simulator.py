@@ -10,11 +10,22 @@ def poisson(x, mean):
     return ps.pmf(x, mean)
 
 class LossSimulation:
-    def __init__(self, codelife, unit_sales_per_day, units_per_case, lead_time):
+    def __init__(self, codelife, unit_sales_per_day, units_per_case, lead_time, seed = None):
+        """The product characteristics are defined by 4 parameters. Knowing these enables us to forecast the performance of this product.
+
+        Args:
+            codelife (_type_): _description_
+            unit_sales_per_day (_type_): _description_
+            units_per_case (_type_): _description_
+            lead_time (_type_): _description_
+        """
         self.codelife = codelife
         self.unit_sales_per_day = unit_sales_per_day
         self.units_per_case = units_per_case
         self.lead_time = lead_time
+
+        if seed is not None:
+            np.random.seed(seed)
 
         # Initialise the inventory. This is a list of (n_units, days_left) lists where n_units is the number of units in the case and days_left is the number of days remaining before the code expires.
         self.n_units, self.days_left = self.initialise_inventory()
@@ -138,22 +149,29 @@ class LossSimulation:
         print(losses)
         return np.mean(losses), np.std(losses)
 
-    def calculate_loss(self, total_days, stockout_threshold, rotation = True, verbose = 0, weights = np.array([1,1])):
-        
-        wasted, cases_ordered, stockout = self.simulate(total_days = total_days, stockout_threshold = stockout_threshold, rotation = rotation, verbose = verbose)
+    def calculate_loss(self, total_days, stockout_threshold, rotation=True, verbose=0):
+        """
+        Calculate the total loss, availability loss, and waste loss for the given parameters.
+
+        Parameters:
+        total_days (int): The total number of days to simulate.
+        stockout_threshold (int): The threshold for stockout.
+        rotation (bool, optional): Whether to consider rotation. Defaults to True.
+        verbose (int, optional): The level of verbosity. Defaults to 0.
+
+        Returns:
+        tuple: A tuple containing the total loss, availability loss, and waste loss.
+        """
+        wasted, cases_ordered, stockout = self.simulate(total_days=total_days, stockout_threshold=stockout_threshold, rotation=rotation, verbose=verbose)
 
         # Normalise the weights, and apply them to the waste losses. 
-        assert len(weights) == 2
-        weights = 2 * weights / np.sum(weights)
-
-        availability_loss = np.sum(stockout) / len(stockout) * weights[0]
-        waste_loss = (np.sum(wasted) / np.sum(cases_ordered) / self.units_per_case) * weights[1]
+        availability_loss = np.sum(stockout) / len(stockout)
+        waste_loss = (np.sum(wasted) / np.sum(cases_ordered) / self.units_per_case)
 
         return availability_loss + waste_loss, availability_loss, waste_loss
 
     def simulate(self, total_days = 100, stockout_threshold = 0.1, rotation = True, verbose = 0, n_units = None, days_left = None):
-        """
-        Run the simulation to calculate the loss for a given set of parameters.
+        """Run the simulation to calculate the loss for a given set of parameters.
 
         Each day do the following:
             1. Calculate the probability of a stockout for the current inventory at lead_time in the future. 
@@ -175,6 +193,7 @@ class LossSimulation:
         
         for day in range(total_days):
 
+            # Each day we calculate the initial probability of a stockout
             prob_stockout = self.probability_stockout(tuple(n_units), tuple(days_left), self.unit_sales_per_day, self.lead_time, self.codelife, rotation, verbose)
             
             if verbose >= 1:
@@ -184,19 +203,8 @@ class LossSimulation:
                 active_groups = (days_left > 0) & (days_left <= self.codelife)
                 print('Day', day, 'Active Groups:', np.argwhere(active_groups).flatten())
             
-            i = 0
-            while prob_stockout > stockout_threshold:
-                cases_ordered[day] += 1
-                n_units, days_left = self.order_stock(n_units, days_left)
-                prob_stockout = self.probability_stockout(tuple(n_units), tuple(days_left), self.unit_sales_per_day, self.lead_time, self.codelife, rotation, verbose)
-                if verbose >= 1:
-                    print('Day', day, 'ordered more stock')
-                    print('Day', day, n_units, days_left, prob_stockout)
-                i += 1
-                if i > 30:
-                    print('Warning: infinite loop', day, n_units, days_left, prob_stockout, stockout_threshold)
-                    break
-                    
+            n_units, days_left, cases_ordered[day] = self.order_stock(n_units, days_left, prob_stockout, stockout_threshold, rotation)
+
             n_units[days_left <= self.codelife] = self.simulate_sales(n_units[days_left <= self.codelife], rotation, verbose)
 
             wasted_units_mask = days_left <= 1
@@ -216,8 +224,27 @@ class LossSimulation:
             days_left = days_left[keep_units_mask] - 1
 
         return wasted_units, cases_ordered, stockout
+
+    def order_stock(self, n_units, days_left, prob_stockout, stockout_threshold, rotation, verbose = 0):
+        cases_ordered = 0
+        
+        while prob_stockout > stockout_threshold:
+            # If we've not met the threshold, then we order a single case and recalculate the probability of a stockout
+            # This repeats until the probability of a stockout is below the threshold.
+            n_units, days_left = self.order_single_case(n_units, days_left)
+            prob_stockout = self.probability_stockout(tuple(n_units), tuple(days_left), self.unit_sales_per_day, self.lead_time, self.codelife, rotation, verbose)
+            cases_ordered += 1
+
+        return n_units, days_left, cases_ordered
+            # if verbose >= 1:
+            #     print('Day', day, 'ordered more stock')
+            #     print('Day', day, n_units, days_left, prob_stockout)
+            # i += 1
+            # if i > 30:
+            #     print('Warning: infinite loop', day, n_units, days_left, prob_stockout, stockout_threshold)
+            #     break
   
-    def order_stock(self, n_units, days_left):
+    def order_single_case(self, n_units, days_left):
         """
         Update the n_units and days_left arrays to represent an increased stock level. 
 
@@ -346,7 +373,6 @@ class LossSimulation:
                 print('Probability Sales:       ', p_sales)
                 print()
 
-            
 
             # Propagate the probability distribution forwards
             active_p_units_list = self.propagate_probability(p_sales, active_p_units_list)
@@ -367,6 +393,7 @@ class LossSimulation:
 
     def update_units_sales(self, p_sales, p_units):
         """Given the probability of observing a given number of sales and the probability of having a given number of units, calculate the probability of having a given number of units left, and the probability of observing a given number of sales after selling through the available units. 
+        
         In the future we can consider including logsumexp to avoid underflow errors. But for now we'll implement the logic without.
         """
         n_sales, n_units = p_sales.shape[0], p_units.shape[0]
@@ -377,11 +404,13 @@ class LossSimulation:
         p_matix = p_sales[:, np.newaxis] * p_units[np.newaxis, :]
 
         for i in range(1, n_sales):
-            updated_p_sales[i] = np.sum(np.diagonal(p_matix, offset=-i))
+            # updated_p_sales[i] = np.sum(np.diagonal(p_matix, offset=-i))
+            updated_p_sales[i] = np.trace(p_matix, offset=-i)
         updated_p_sales[0] = 1 - np.sum(updated_p_sales[1:])
-
+        
         for i in range(1, n_units):
-            updated_p_units[i] = np.sum(np.diagonal(p_matix, offset=i))
+            # updated_p_units[i] = np.sum(np.diagonal(p_matix, offset=i))
+            updated_p_units[i] = np.trace(p_matix, offset=i)
         updated_p_units[0] = 1 - np.sum(updated_p_units[1:])
         # TODO: this isn't always correct with large numerical overflows. 
 
@@ -502,57 +531,3 @@ class LossSimulation:
         
         
         return n_units - sales
-
-    def naive_get_availability_waste(self, days_code_life: int, days_restock: int, unit_sales_per_day: float, units_per_case: int):
-        days = np.arange(1, days_code_life + 1)
-        
-        # Availability lost on average
-        days_till_stockout = days_restock - days
-        probability_of_selling_case = poisson(x = units_per_case, mean = unit_sales_per_day * days)
-        
-        # Percentage availability loss is equal to expected days of availability lost over total days
-        min_index = min(days_code_life, days_restock)
-        percentage_availability_loss = np.sum(probability_of_selling_case[:min_index] * days_till_stockout[:min_index]) / min_index
-        # However if the code_life has passed, we lose that in availability as well
-        if days_code_life < days_restock:
-            percentage_availability_loss += (days_restock - days_code_life) / days_restock
-
-        # Waste loss on average
-        remaining_stock = np.arange(0, units_per_case + 1)      # [0, 1, ..., units_per_case]
-        sold_stock = units_per_case - remaining_stock           # [units_per_case, ..., 1, 0]
-        
-        # Calculate remaining stock when it's either expired or we have new supply
-        probability_of_remaining_stock_at_refresh = poisson(x = sold_stock, mean = unit_sales_per_day * min_index)
-
-        # Percentage waste loss is equal to expected waste loss over units per case
-        percentage_waste_loss = np.sum(probability_of_remaining_stock_at_refresh[1:] * remaining_stock[1:]) / units_per_case
-
-        return percentage_availability_loss, percentage_waste_loss, probability_of_selling_case, probability_of_remaining_stock_at_refresh
-
-    def naive_get_min_availability_waste(self, availability_weighting = 1, return_all = False):
-        days_code_life = self.codelife
-        unit_sales_per_day = self.unit_sales_per_day
-        units_per_case = self.units_per_case
-
-        max_days_restock = 2 * days_code_life
-        
-        possible_days_restock = np.arange(1, max_days_restock + 1)
-        a_losses = np.zeros(len(possible_days_restock))
-        w_losses = np.zeros(len(possible_days_restock))
-        total_losses = np.zeros(len(possible_days_restock))
-
-        total_waste = availability_weighting + 1
-        stats = (0,0,0)
-        for i, days_restock in enumerate(possible_days_restock):
-            a_loss, w_loss, p_sell_case, p_rem_stock = self.naive_get_availability_waste(days_code_life, days_restock, unit_sales_per_day, units_per_case)
-            if a_loss * availability_weighting + w_loss < total_waste:
-                total_waste = a_loss * availability_weighting + w_loss
-                stats = [days_restock, a_loss, w_loss]
-
-            a_losses[i] = a_loss * availability_weighting
-            w_losses[i] = w_loss
-            total_losses[i] = a_loss * availability_weighting + w_loss
-
-        if return_all:
-            return stats, possible_days_restock, a_losses, w_losses, total_losses
-        return stats
