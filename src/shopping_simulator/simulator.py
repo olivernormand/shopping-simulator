@@ -175,8 +175,12 @@ class LossSimulation:
         )
 
     def calculate_min_loss_variance(
-        self, total_days, stockout_threshold, repeats=10, rotation=True
-    ):
+        self,
+        total_days: int,
+        stockout_threshold: float,
+        repeats: int = 10,
+        rotation: bool = True,
+    ) -> tuple[float, float]:
         """
         Due to the stochastic nature of the simulation, we can't guarantee that the minimum loss we find is actually the minimum loss.
         To account for this, we can run the simulation multiple times and take the mean and standard deviation of the losses.
@@ -188,10 +192,11 @@ class LossSimulation:
                 total_days // repeats, stockout_threshold, rotation=rotation, verbose=0
             )
 
-        print(losses)
         return np.mean(losses), np.std(losses)
 
-    def calculate_loss(self, total_days, stockout_threshold, rotation=True, verbose=0):
+    def calculate_loss(
+        self, total_days: int, stockout_threshold: float, rotation=True, verbose=0
+    ) -> tuple[float, float, float]:
         """
         Calculate the total loss, availability loss, and waste loss for the given parameters.
 
@@ -219,13 +224,13 @@ class LossSimulation:
 
     def simulate(
         self,
-        total_days=100,
-        stockout_threshold=0.1,
-        rotation=True,
-        verbose=0,
-        n_units=None,
-        days_left=None,
-    ):
+        total_days: int = 100,
+        stockout_threshold: float = 0.1,
+        rotation: bool = True,
+        verbose: int = 0,
+        n_units: np.ndarray | None = None,
+        days_left: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run the simulation to calculate the loss for a given set of parameters.
 
         Each day do the following:
@@ -294,8 +299,14 @@ class LossSimulation:
         return wasted_units, cases_ordered, stockout
 
     def order_stock(
-        self, n_units, days_left, prob_stockout, stockout_threshold, rotation, verbose=0
-    ):
+        self,
+        n_units: np.ndarray,
+        days_left: np.ndarray,
+        prob_stockout: float,
+        stockout_threshold: float,
+        rotation: bool,
+        verbose: int = 0,
+    ) -> tuple[np.ndarray, np.ndarray, int]:
         cases_ordered = 0
 
         while prob_stockout > stockout_threshold:
@@ -314,15 +325,10 @@ class LossSimulation:
             cases_ordered += 1
 
         return n_units, days_left, cases_ordered
-        # if verbose >= 1:
-        #     print('Day', day, 'ordered more stock')
-        #     print('Day', day, n_units, days_left, prob_stockout)
-        # i += 1
-        # if i > 30:
-        #     print('Warning: infinite loop', day, n_units, days_left, prob_stockout, stockout_threshold)
-        #     break
 
-    def order_single_case(self, n_units, days_left):
+    def order_single_case(
+        self, n_units: np.ndarray, days_left: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Update the n_units and days_left arrays to represent an increased stock level.
 
@@ -346,14 +352,14 @@ class LossSimulation:
     @functools.lru_cache(maxsize=None)
     def probability_stockout(
         self,
-        n_units,
-        days_left,
-        unit_sales_per_day,
-        lead_time,
-        codelife,
-        rotation_weighting=True,
-        verbose=0,
-    ):
+        n_units: np.ndarray,
+        days_left: np.ndarray,
+        unit_sales_per_day: float,
+        lead_time: int,
+        codelife: int,
+        rotation_weighting: bool = True,
+        verbose: int = 0,
+    ) -> float:
         """We calculate the probability of a stockout as follows:
         Take in the number of units at each remaining day of codelife, units with remaining codelife that exceeds the shelf_life are aggregated.
         """
@@ -384,7 +390,7 @@ class LossSimulation:
         lead_time: int,
         codelife: int,
         verbose: int = 0,
-    ):
+    ) -> float:
         """
         Calculates the probability of a stockout occuring at lead_time + 1 days into the future.
         This means stock ordered today will reduce this stockout probability.
@@ -509,7 +515,9 @@ class LossSimulation:
 
         return prob_stockout
 
-    def update_units_sales(self, p_sales, p_units):
+    def update_units_sales(
+        self, p_sales: np.ndarray, p_units: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Given the probability of observing a given number of sales and the probability of having a given number of units, calculate the probability of having a given number of units left, and the probability of observing a given number of sales after selling through the available units.
 
         In the future we can consider including logsumexp to avoid underflow errors. But for now we'll implement the logic without.
@@ -534,7 +542,9 @@ class LossSimulation:
 
         return updated_p_sales, updated_p_units
 
-    def propagate_probability(self, p_sales, p_units_list):
+    def propagate_probability(
+        self, p_sales: np.ndarray, p_units_list: list[np.ndarray]
+    ) -> list[np.ndarray]:
         updated_p_units_list = []
 
         for p_units in p_units_list:
@@ -547,14 +557,14 @@ class LossSimulation:
 
     def probability_stockout_no_rotation(
         self,
-        n_units,
-        days_left,
-        unit_sales_per_day,
-        lead_time,
-        codelife,
-        verbose=0,
-        account_for_variance=False,
-    ):
+        n_units: np.ndarray,
+        days_left: np.ndarray,
+        unit_sales_per_day: float,
+        lead_time: int,
+        codelife: int,
+        verbose: int = 0,
+        account_for_variance: bool = False,
+    ) -> float:
         """
         When we don't rotate the stock, we can calculate the probability of a stockout as follows:
             1. Assume the sales for a given day are distributed evenly across all products and are weighted by the unit days available as a fraction of the total.
@@ -617,7 +627,9 @@ class LossSimulation:
 
         return np.prod(prob_stockout)
 
-    def simulate_sales(self, n_units, rotation_weighting=True, verbose=0):
+    def simulate_sales(
+        self, n_units: np.ndarray, rotation_weighting: bool = True, verbose: int = 0
+    ) -> np.ndarray:
         """Calculate the expected sales for each day by sampling from the poisson distribution with mean equal to the expected sales per day.
 
         If rotation_weighting is True:
