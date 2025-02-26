@@ -425,7 +425,7 @@ class LossSimulation:
         if not np.any(active_groups):
             if verbose >= 2:
                 print("No active groups at end of lead time")
-                return 1
+            return 1
 
         # Initialise the probability distributions for each group.
         p_units_list = []
