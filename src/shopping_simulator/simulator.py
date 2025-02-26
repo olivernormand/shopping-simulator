@@ -4,6 +4,8 @@ from scipy.stats import poisson as ps
 
 import functools
 
+from shopping_simulator.models import MinimumLoss
+
 
 def poisson(x, mean):
     return ps.pmf(x, mean)
@@ -18,8 +20,7 @@ class LossSimulation:
         lead_time: int,
         seed: int | None = None,
     ):
-        """The product characteristics are defined by 4 parameters. Knowing these enables us to forecast the performance of this product.
-        """
+        """The product characteristics are defined by 4 parameters. Knowing these enables us to forecast the performance of this product."""
         self.codelife = codelife
         self.unit_sales_per_day = unit_sales_per_day
         self.units_per_case = units_per_case
@@ -48,7 +49,7 @@ class LossSimulation:
         multipliers=(1, 1),
         deep_search=0,
         verbose=False,
-    ):
+    ) -> MinimumLoss:
         """Calculate the minimum loss for a given set of parameters.
         First searching a full range of stockout thresholds. Optionally narrow the search window and repeat.
 
@@ -56,11 +57,11 @@ class LossSimulation:
 
         Parameters
         ----------
-        total_days : _type_
+        total_days : int
             How many days the simulation should run for in total. This is split amongst the searches.
         rotation : bool, optional
             Whether to use stock rotation, by default True
-        stockout_threshold : _type_, optional
+        stockout_threshold : np.ndarray, optional
             What the starting stockout threshold search should be, by default np.linspace(1e-6, 0.999, 10)
         multipliers : tuple, optional
             The weighting of total days between the first and second search, by default (1, 1)
@@ -69,8 +70,8 @@ class LossSimulation:
 
         Returns
         -------
-        _type_
-            _description_
+        MinimumLoss
+            The minimum loss and the stockout threshold that achieves it.
         """
 
         granularitys = (len(stockout_threshold), deep_search)
@@ -162,10 +163,15 @@ class LossSimulation:
         all_availability_loss = all_availability_loss[idx]
         all_waste_loss = all_waste_loss[idx]
 
-        return (
-            np.min(min_loss),
-            stockout_threshold[np.argmin(min_loss)],
-            (all_threshold, all_loss, all_availability_loss, all_waste_loss),
+        return MinimumLoss(
+            min_loss=np.min(min_loss),
+            min_stockout_threshold=stockout_threshold[np.argmin(min_loss)],
+            min_waste_loss=all_waste_loss[np.argmin(min_loss)],
+            min_availability_loss=all_availability_loss[np.argmin(min_loss)],
+            thresholds=all_threshold,
+            loss=all_loss,
+            availability_loss=all_availability_loss,
+            waste_loss=all_waste_loss,
         )
 
     def calculate_min_loss_variance(
