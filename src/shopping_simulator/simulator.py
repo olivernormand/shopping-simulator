@@ -4,7 +4,7 @@ from scipy.stats import poisson as ps
 
 import functools
 
-from shopping_simulator.models import MinimumLoss
+from shopping_simulator.models import MinimumLoss, SimulationResults
 
 
 def poisson(x, mean):
@@ -66,7 +66,7 @@ class LossSimulation:
         multipliers : tuple, optional
             The weighting of total days between the first and second search, by default (1, 1)
         deep_search : int, optional
-            How many spacings to allocate for the deep search. If zero then no secondary search occurs, by default 0
+            How many search spacings to allocate for the deep search. If zero then no secondary search occurs, by default 0
 
         Returns
         -------
@@ -92,49 +92,63 @@ class LossSimulation:
                 "days",
             )
 
-        stockout_thresholds = []
-        min_losses = []
-        availability_losses = []
-        waste_losses = []
-
-        min_loss = np.zeros(len(stockout_threshold))
+        loss = np.zeros(len(stockout_threshold))
         availability_loss = np.zeros(len(stockout_threshold))
         waste_loss = np.zeros(len(stockout_threshold))
+        units_sold = np.zeros(len(stockout_threshold))
+        eod_units = np.zeros(len(stockout_threshold))
 
         for i, threshold in enumerate(stockout_threshold):
-            min_loss[i], availability_loss[i], waste_loss[i] = self.calculate_loss(
+            (
+                loss[i],
+                availability_loss[i],
+                waste_loss[i],
+                units_sold[i],
+                eod_units[i],
+            ) = self.calculate_loss(
                 int(total_days * multipliers[0]),
                 threshold,
                 rotation=rotation,
                 verbose=0,
             )
 
-        stockout_thresholds.append(stockout_threshold)
-        min_losses.append(min_loss)
-        availability_losses.append(availability_loss)
-        waste_losses.append(waste_loss)
+        stockout_thresholds = [stockout_threshold]
+        loss = [loss]
+        availability_loss = [availability_loss]
+        waste_loss = [waste_loss]
+        units_sold = [units_sold]
+        eod_units = [eod_units]
 
         if verbose:
             print("INITIAL SEARCH COMPLETE")
             print("Stockout Thresholds:", stockout_threshold)
-            print("Min Loss:", min_loss)
+            print("Min Loss:", loss)
 
         if deep_search > 0:
             # Narrow down the search window and go again
-            min_loss_sum = np.convolve(min_loss, np.ones(2), "valid")
-            arg_min = np.argmin(min_loss_sum)
+            loss_sum = np.convolve(loss, np.ones(2), "valid")
+            arg_min = np.argmin(loss_sum)
             lower_bound = stockout_threshold[arg_min]
             upper_bound = stockout_threshold[arg_min + 1]
             expand_bound = (upper_bound - lower_bound) / 2
             lower_bound = np.max([0, lower_bound - expand_bound])
             upper_bound = np.min([1, upper_bound + expand_bound])
             stockout_threshold = np.linspace(lower_bound, upper_bound, granularitys[1])
-            min_loss = np.zeros(len(stockout_threshold))
-            availability_loss = np.zeros(len(stockout_threshold))
-            waste_loss = np.zeros(len(stockout_threshold))
+
+            deep_loss = np.zeros(len(stockout_threshold))
+            deep_availability_loss = np.zeros(len(stockout_threshold))
+            deep_waste_loss = np.zeros(len(stockout_threshold))
+            deep_units_sold = np.zeros(len(stockout_threshold))
+            deep_eod_units = np.zeros(len(stockout_threshold))
 
             for i, threshold in enumerate(stockout_threshold):
-                min_loss[i], availability_loss[i], waste_loss[i] = self.calculate_loss(
+                (
+                    deep_loss[i],
+                    deep_availability_loss[i],
+                    deep_waste_loss[i],
+                    deep_units_sold[i],
+                    deep_eod_units[i],
+                ) = self.calculate_loss(
                     int(total_days * multipliers[1]),
                     threshold,
                     rotation=rotation,
@@ -142,36 +156,46 @@ class LossSimulation:
                 )
 
             stockout_thresholds.append(stockout_threshold)
-            min_losses.append(min_loss)
-            availability_losses.append(availability_loss)
-            waste_losses.append(waste_loss)
+            loss.append(deep_loss)
+            availability_loss.append(deep_availability_loss)
+            waste_loss.append(deep_waste_loss)
+            units_sold.append(deep_units_sold)
+            eod_units.append(deep_eod_units)
 
             if verbose:
                 print("NARROWED SEARCH WINDOW")
                 print("Stockout Thresholds:", stockout_threshold)
-                print("Min Loss:", min_loss)
+                print("Min Loss:", loss)
 
-        all_threshold = np.concatenate(stockout_thresholds, axis=0)
-        all_loss = np.concatenate(min_losses, axis=0)
-        all_availability_loss = np.concatenate(availability_losses, axis=0)
-        all_waste_loss = np.concatenate(waste_losses, axis=0)
+        stockout_thresholds = np.concatenate(stockout_thresholds, axis=0)
+        loss = np.concatenate(loss, axis=0)
+        availability_loss = np.concatenate(availability_loss, axis=0)
+        waste_loss = np.concatenate(waste_loss, axis=0)
+        units_sold = np.concatenate(units_sold, axis=0)
+        eod_units = np.concatenate(eod_units, axis=0)
 
         # Now sort the arrays by the threshold
-        idx = np.argsort(all_threshold)
-        all_threshold = all_threshold[idx]
-        all_loss = all_loss[idx]
-        all_availability_loss = all_availability_loss[idx]
-        all_waste_loss = all_waste_loss[idx]
+        idx = np.argsort(stockout_thresholds)
+        stockout_thresholds = stockout_thresholds[idx]
+        loss = loss[idx]
+        availability_loss = availability_loss[idx]
+        waste_loss = waste_loss[idx]
+        units_sold = units_sold[idx]
+        eod_units = eod_units[idx]
 
         return MinimumLoss(
-            min_loss=np.min(min_loss),
-            min_stockout_threshold=stockout_threshold[np.argmin(min_loss)],
-            min_waste_loss=all_waste_loss[np.argmin(min_loss)],
-            min_availability_loss=all_availability_loss[np.argmin(min_loss)],
-            thresholds=all_threshold,
-            loss=all_loss,
-            availability_loss=all_availability_loss,
-            waste_loss=all_waste_loss,
+            min_loss=np.min(loss),
+            min_stockout_threshold=stockout_thresholds[np.argmin(loss)],
+            min_waste_loss=waste_loss[np.argmin(loss)],
+            min_availability_loss=availability_loss[np.argmin(loss)],
+            mean_units_sold_per_day=units_sold[np.argmin(loss)],
+            mean_eod_units=eod_units[np.argmin(loss)],
+            thresholds=stockout_thresholds,
+            loss=loss,
+            availability_loss=availability_loss,
+            waste_loss=waste_loss,
+            units_sold=units_sold,
+            eod_units=eod_units,
         )
 
     def calculate_min_loss_variance(
@@ -188,7 +212,7 @@ class LossSimulation:
         """
         losses = np.zeros(repeats)
         for i in range(repeats):
-            losses[i], _, _ = self.calculate_loss(
+            losses[i], _, _, _, _ = self.calculate_loss(
                 total_days // repeats, stockout_threshold, rotation=rotation, verbose=0
             )
 
@@ -196,9 +220,9 @@ class LossSimulation:
 
     def calculate_loss(
         self, total_days: int, stockout_threshold: float, rotation=True, verbose=0
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, float, float]:
         """
-        Calculate the total loss, availability loss, and waste loss for the given parameters.
+        Calculate the total loss, availability loss, waste loss, units sold, and eod units for the given parameters.
 
         Parameters:
         total_days (int): The total number of days to simulate.
@@ -209,7 +233,7 @@ class LossSimulation:
         Returns:
         tuple: A tuple containing the total loss, availability loss, and waste loss.
         """
-        wasted, cases_ordered, stockout = self.simulate(
+        res = self.simulate(
             total_days=total_days,
             stockout_threshold=stockout_threshold,
             rotation=rotation,
@@ -217,10 +241,20 @@ class LossSimulation:
         )
 
         # Normalise the weights, and apply them to the waste losses.
-        availability_loss = np.sum(stockout) / len(stockout)
-        waste_loss = np.sum(wasted) / np.sum(cases_ordered) / self.units_per_case
+        availability_loss = np.sum(res.stockout) / len(res.stockout)
+        waste_loss = (
+            np.sum(res.wasted_units) / np.sum(res.cases_ordered) / self.units_per_case
+        )
+        units_sold = np.mean(res.units_sold)
+        eod_units = np.mean(res.eod_units)
 
-        return availability_loss + waste_loss, availability_loss, waste_loss
+        return (
+            availability_loss + waste_loss,
+            availability_loss,
+            waste_loss,
+            units_sold,
+            eod_units,
+        )
 
     def simulate(
         self,
@@ -230,7 +264,7 @@ class LossSimulation:
         verbose: int = 0,
         n_units: np.ndarray | None = None,
         days_left: np.ndarray | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> SimulationResults:
         """Run the simulation to calculate the loss for a given set of parameters.
 
         Each day do the following:
@@ -247,9 +281,12 @@ class LossSimulation:
             n_units = self.n_units
         if days_left is None:
             days_left = self.days_left
+
         wasted_units = np.zeros(total_days, dtype=int)
         stockout = np.zeros(total_days, dtype=bool)
         cases_ordered = np.zeros(total_days, dtype=int)
+        units_sold = np.zeros(total_days, dtype=int)
+        eod_units = np.zeros(total_days, dtype=int)
 
         for day in range(total_days):
             # Each day we calculate the initial probability of a stockout
@@ -272,13 +309,17 @@ class LossSimulation:
                     "Day", day, "Active Groups:", np.argwhere(active_groups).flatten()
                 )
 
+            # Order stock, if the threshold is met (if threshold is not met, then these are returned unchanged)
             n_units, days_left, cases_ordered[day] = self.order_stock(
                 n_units, days_left, prob_stockout, stockout_threshold, rotation
             )
 
-            n_units[days_left <= self.codelife] = self.simulate_sales(
+            # Simulate the impact of the stock on sales
+            n_units[days_left <= self.codelife], units_sold[day] = self.simulate_sales(
                 n_units[days_left <= self.codelife], rotation, verbose
             )
+
+            eod_units[day] = np.sum(n_units)
 
             wasted_units_mask = days_left <= 1
             keep_units_mask = (days_left > 1) & (n_units > 0)
@@ -296,7 +337,13 @@ class LossSimulation:
             n_units = n_units[keep_units_mask]
             days_left = days_left[keep_units_mask] - 1
 
-        return wasted_units, cases_ordered, stockout
+        return SimulationResults(
+            wasted_units=wasted_units,
+            cases_ordered=cases_ordered,
+            stockout=stockout,
+            units_sold=units_sold,
+            eod_units=eod_units,
+        )
 
     def order_stock(
         self,
@@ -629,7 +676,7 @@ class LossSimulation:
 
     def simulate_sales(
         self, n_units: np.ndarray, rotation_weighting: bool = True, verbose: int = 0
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, int]:
         """Calculate the expected sales for each day by sampling from the poisson distribution with mean equal to the expected sales per day.
 
         If rotation_weighting is True:
@@ -646,9 +693,10 @@ class LossSimulation:
         if len(n_units) == 0 or np.sum(n_units) == 0:
             if verbose >= 2:
                 print("Sales today: nothing to sell")
-            return n_units
+            return n_units, 0
 
         sales_today = ps.rvs(self.unit_sales_per_day)
+        original_sales_today = sales_today
         sales = np.zeros(len(n_units), dtype=int)
 
         if verbose >= 2:
@@ -661,7 +709,6 @@ class LossSimulation:
         else:
             # Sample from the multinomial distribution to get the number of units sold from each group. Never sample more than the minimum number of units in any group.
             # Repeat until we have assigned all the sales for today, or until no units are left.
-            original_sales_today = sales_today
             while sales_today > 0 and np.sum(n_units - sales) > 0:
                 sales_today -= 1
                 weights = (n_units - sales) / np.sum(n_units - sales)
@@ -671,4 +718,4 @@ class LossSimulation:
 
             assert np.sum(sales) == np.min([original_sales_today, np.sum(n_units)])
 
-        return n_units - sales
+        return n_units - sales, original_sales_today

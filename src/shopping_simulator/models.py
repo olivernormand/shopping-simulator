@@ -1,4 +1,27 @@
 from pydantic import Field, BaseModel
+import numpy as np
+
+
+class SimulationResults(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
+    wasted_units: np.ndarray = Field(
+        description="The number of units wasted on each day of the simulation"
+    )
+    cases_ordered: np.ndarray = Field(
+        description="The number of cases ordered on each day of the simulation"
+    )
+    stockout: np.ndarray = Field(
+        description="Whether there was a stockout on each day of the simulation"
+    )
+
+    units_sold: np.ndarray = Field(
+        description="The number of units sold on each day of the simulation"
+    )
+
+    eod_units: np.ndarray = Field(
+        description="The number of units left in stock at the end of each day of the simulation"
+    )
 
 
 class MinimumLoss(BaseModel):
@@ -18,6 +41,14 @@ class MinimumLoss(BaseModel):
         description="The stockout threshold that achieves the minimum loss. This is the same as the acceptable probability of stockout before ordering more stock."
     )
 
+    mean_units_sold_per_day: float = Field(
+        description="The average units sold per day that are sold in the minimum loss scenario."
+    )
+
+    mean_eod_units: float = Field(
+        description="The average eod units that are left in stock in the minimum loss scenario after the days sales."
+    )
+
     thresholds: list[float] = Field(
         description="The thresholds that were tested to find the minimum loss. These are the stockout thresholds that were tested."
     )
@@ -32,4 +63,12 @@ class MinimumLoss(BaseModel):
 
     waste_loss: list[float] = Field(
         description="The waste loss that was achieved for each threshold."
+    )
+
+    units_sold: list[float] = Field(
+        description="The units sold per day for each threshold."
+    )
+
+    eod_units: list[float] = Field(
+        description="The eod units that are left in stock after the days sales for each threshold."
     )
