@@ -2,7 +2,7 @@ from pydantic import Field, BaseModel
 import numpy as np
 
 
-class SimulationResults(BaseModel):
+class SimulationResult(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     wasted_units: np.ndarray = Field(
@@ -24,7 +24,7 @@ class SimulationResults(BaseModel):
     )
 
 
-class MinimumLoss(BaseModel):
+class MinimumLossResult(BaseModel):
     min_loss: float = Field(
         description="The minimum loss that can be achieved. This equals the waste loss + the availability loss."
     )

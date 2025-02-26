@@ -1,10 +1,15 @@
+"""
+Written by Oliver Normand (oliver@normand.uk).
+
+The initial work was done as part of an assessment, this led to scrappy code.
+
+The code was completely rewritten to be more general and optimised. Subsequent additions were since made.
+"""
+
 import numpy as np
-
 from scipy.stats import poisson as ps
-
 import functools
-
-from shopping_simulator.models import MinimumLoss, SimulationResults
+from shopping_simulator.models import MinimumLossResult, SimulationResult
 
 
 def poisson(x, mean):
@@ -49,7 +54,7 @@ class LossSimulation:
         multipliers=(1, 1),
         deep_search=0,
         verbose=False,
-    ) -> MinimumLoss:
+    ) -> MinimumLossResult:
         """Calculate the minimum loss for a given set of parameters.
         First searching a full range of stockout thresholds. Optionally narrow the search window and repeat.
 
@@ -70,7 +75,7 @@ class LossSimulation:
 
         Returns
         -------
-        MinimumLoss
+        MinimumLossResult
             The minimum loss and the stockout threshold that achieves it.
         """
 
@@ -126,7 +131,7 @@ class LossSimulation:
 
         if deep_search > 0:
             # Narrow down the search window and go again
-            loss_sum = np.convolve(loss, np.ones(2), "valid")
+            loss_sum = np.convolve(loss[0], np.ones(2), "valid")
             arg_min = np.argmin(loss_sum)
             lower_bound = stockout_threshold[arg_min]
             upper_bound = stockout_threshold[arg_min + 1]
@@ -183,7 +188,7 @@ class LossSimulation:
         units_sold = units_sold[idx]
         eod_units = eod_units[idx]
 
-        return MinimumLoss(
+        return MinimumLossResult(
             min_loss=np.min(loss),
             min_stockout_threshold=stockout_thresholds[np.argmin(loss)],
             min_waste_loss=waste_loss[np.argmin(loss)],
@@ -198,7 +203,7 @@ class LossSimulation:
             eod_units=eod_units,
         )
 
-    def calculate_min_loss_variance(
+    def calculate_min_loss_std(
         self,
         total_days: int,
         stockout_threshold: float,
@@ -264,7 +269,7 @@ class LossSimulation:
         verbose: int = 0,
         n_units: np.ndarray | None = None,
         days_left: np.ndarray | None = None,
-    ) -> SimulationResults:
+    ) -> SimulationResult:
         """Run the simulation to calculate the loss for a given set of parameters.
 
         Each day do the following:
@@ -337,7 +342,7 @@ class LossSimulation:
             n_units = n_units[keep_units_mask]
             days_left = days_left[keep_units_mask] - 1
 
-        return SimulationResults(
+        return SimulationResult(
             wasted_units=wasted_units,
             cases_ordered=cases_ordered,
             stockout=stockout,
@@ -466,6 +471,8 @@ class LossSimulation:
         To check for active groups after lead_time + 1 days, we need to bear in mind how days are indexed.
         Here the simulation starts at day 0, and hence the lead_time + 1 day is indexed as lead_time.
         Therefore when we check for active groups on the lead_time + 1 day, we need to check for groups that are
+
+        Note to those with above average levels of self-belief. I spent too long getting this logic to fit. I'm pretty sure it's correct even if I couldn't re-explain it to you now. The code below isn't the easiest to follow, but it is to the best of my ability a faithful implementation of the logic above. Change it at your peril, and be warned that even the smallest changes can have outsized impacts on the results.
         """
 
         max_days_ahead = lead_time + 1
@@ -719,3 +726,26 @@ class LossSimulation:
             assert np.sum(sales) == np.min([original_sales_today, np.sum(n_units)])
 
         return n_units - sales, original_sales_today
+
+    def calculate_min_loss_and_variance(
+        self, total_days: int, rotation: bool = True, n_runs: int = 10
+    ) -> tuple[float, float]:
+        """
+        Calculate the minimum loss and the variance of the loss for a given set of parameters.
+
+        Much of the variance comes from the initial identification of the minimum loss threshold, even if we can accurately quantify the loss once this is better understood.
+        """
+
+        # In the spirit of total_days being the total number of simulation days available overall, we allocate half the days for finding the minimum threshold, and the second half for calculating the variance.
+
+        total_days = total_days // n_runs
+
+        min_loss_results = np.zeros(n_runs)
+
+        for i in range(n_runs):
+            min_loss_result = self.calculate_min_loss(
+                total_days, rotation, deep_search=5, multipliers=(0.4, 1)
+            )
+            min_loss_results[i] = min_loss_result.min_loss
+
+        return np.mean(min_loss_results), np.std(min_loss_results) / np.sqrt(n_runs)
