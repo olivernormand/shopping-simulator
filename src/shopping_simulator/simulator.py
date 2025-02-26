@@ -377,7 +377,13 @@ class LossSimulation:
         return prob_stockout
 
     def probability_stockout_rotation(
-        self, n_units, days_left, unit_sales_per_day, lead_time, codelife, verbose=0
+        self,
+        n_units: np.ndarray,
+        days_left: np.ndarray,
+        unit_sales_per_day: float,
+        lead_time: int,
+        codelife: int,
+        verbose: int = 0,
     ):
         """
         Calculates the probability of a stockout occuring at lead_time + 1 days into the future.
