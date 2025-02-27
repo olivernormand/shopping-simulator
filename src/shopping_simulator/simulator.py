@@ -728,24 +728,23 @@ class LossSimulation:
         return n_units - sales, original_sales_today
 
     def calculate_min_loss_and_variance(
-        self, total_days: int, rotation: bool = True, n_runs: int = 10
+        self, total_days: int, rotation: bool = True
     ) -> tuple[float, float]:
         """
         Calculate the minimum loss and the variance of the loss for a given set of parameters.
 
         Much of the variance comes from the initial identification of the minimum loss threshold, even if we can accurately quantify the loss once this is better understood.
+
+        NB: this isn't calculating the true variance at the moment, but we hit annoying numerical issues if we do that.
         """
 
         # In the spirit of total_days being the total number of simulation days available overall, we allocate half the days for finding the minimum threshold, and the second half for calculating the variance.
 
-        total_days = total_days // n_runs
+        total_days = total_days // 2
 
-        min_loss_results = np.zeros(n_runs)
+        min_loss = self.calculate_min_loss(total_days, rotation)
+        min_loss, min_loss_std = self.calculate_min_loss_std(
+            total_days, stockout_threshold=min_loss.min_stockout_threshold
+        )
 
-        for i in range(n_runs):
-            min_loss_result = self.calculate_min_loss(
-                total_days, rotation, deep_search=5, multipliers=(0.4, 1)
-            )
-            min_loss_results[i] = min_loss_result.min_loss
-
-        return np.mean(min_loss_results), np.std(min_loss_results) / np.sqrt(n_runs)
+        return min_loss, min_loss_std
